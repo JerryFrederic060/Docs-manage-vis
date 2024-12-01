@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>过程文档集合鱼骨图</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        #chart {
+            width: 100%;
+            height: 800px;
+        }
+        
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+        }
+        
+        .button-container {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        #selectFolder {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        #selectFolder:hover {
+            background-color: #45a049;
+        }
+        
+        #fileList {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: rgba(40, 40, 40, 0.95);
+            border-radius: 8px;
+            padding: 15px;
+            max-width: 400px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+            color: #fff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+        }
+        
+        #fileList h3 {
+            margin: 0 0 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #555;
+            color: #fff;
+        }
+        
+        #fileList ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+        
+        #fileList li {
+            padding: 5px 0;
+            border-bottom: 1px solid #444;
+            font-size: 14px;
+        }
+        
+        #fileList li:last-child {
+            border-bottom: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="button-container">
+        <button id="selectFolder">选择Pro-Docs文件夹</button>
+    </div>
+    <div id="chart"></div>
+    <div id="fileList">
+        <h3>文件列表</h3>
+        <ul></ul>
+    </div>
+    <script>
+        let chart = null;
+
+        async function getDirectoryStructure(dirHandle) {
+            const structure = {
+                name: dirHandle.name,
+                children: [],
+                createTime: new Date().toISOString(),
+                fileCount: 0,
+                files: []
+            };
+
+            for await (const entry of dirHandle.values()) {
+                if (entry.kind === 'directory') {
+                    const childStructure = await getDirectoryStructure(entry);
+                    structure.children.push(childStructure);
+                    structure.fileCount += childStructure.fileCount;
+                } else if (entry.kind === 'file') {
+                    structure.fileCount++;
+                    structure.files.push({
+                        name: entry.name,
+                    });
+                }
+            }
+
+            return structure;
+        }
+
+        function processData(data) {
+            const nodes = [];
+            const links = [];
+            let id = 0;
+            const levelWidth = 500; // 一级节点之间的水平间距
+            const childRadius = 250; // 二级节点分布的半径
+            const thirdRadius = 250; // 三级节点分布的半径
+            const startX = 100; // 修改起始X坐标，避免重叠
+
+            function sortChildren(node) {
+                if (node.children && node.children.length > 0) {
+                    node.children.sort((a, b) => a.name.localeCompare(b.name));
+                    node.children.forEach(child => sortChildren(child));
+                }
+            }
+
+            function shouldBeColored(node) {
+                if (!node.children || node.children.length === 0) {
+                    return node.fileCount > 0;
+                }
+
+                if (node.level === 1) {
+                    function checkLowestNodes(subNode) {
+                        if (!subNode.children || subNode.children.length === 0) {
+                            return subNode.fileCount > 0;
+                        }
+                        return subNode.children.every(checkLowestNodes);
+                    }
+                    return node.children.every(child => {
+                        if (!child.children || child.children.length === 0) {
+                            return child.fileCount > 0;
+                        }
+                        return child.children.every(checkLowestNodes);
+                    });
+                }
+
+                return node.fileCount > 0;
+            }
+
+            function processNode(node, parentId = -1, level = 0, index = 0) {
+                const currentId = id++;
+
+                // 计算节点位置
+                let x, y;
+                if (level === 0) {
+                    // 根节点位置
+                    x = startX;
+                    y = 400;
+                } else if (level === 1) {
+                    // 一级子节点递进式排列
+                    x = startX + index * levelWidth + 300;
+                    y = 400;
+                    // 存储节点的索引信息
+                    index_info = index;
+                } else if (level === 2) {
+                    const parentNode = nodes[parentId];
+                    const parentIndex = parentNode.index; // 需要在一级节点创建时添加索引
+                    const childCount = node.parent ? node.parent.children.length : 1;
+                    const horizontalSpacing = 150; // 水平间距
+                    const verticalSpacing = 100; // 垂直间距
+                    const baseOffset = 150; // 基础垂直偏移
+
+                    // 计算起始位置，使节点组居中
+                    const totalWidth = (childCount - 1) * horizontalSpacing;
+                    const startX = parentNode.x - totalWidth / 2;
+
+                    // 根据父节点的索引决定子节点在上方还是下方
+                    const isParentEven = parentIndex % 2 === 1; // 注意：索引从0开始，所以1是第二个（偶数位置）
+
+                    x = startX + index * horizontalSpacing;
+                    if (isParentEven) {
+                        // 偶数位置的父节点，子节点在上方
+                        y = parentNode.y - baseOffset - (index * verticalSpacing);
+                        // 如果是偶数索引的节点，向右偏移
+                        if (index % 2 === 0) {
+                            x += 40;
+                        }
+                    } else {
+                        // 奇数位置的父节点，子节点在下方
+                        y = parentNode.y + baseOffset + (index * verticalSpacing);
+                        // 如果是偶数索引的节点，向右偏移
+                        if (index % 2 === 0) {
+                            x += 40;
+                        }
+                    }
+                } else if (level === 3) {
+                    const parentNode = nodes[parentId];
+                    const childCount = node.parent ? node.parent.children.length : 1;
+                    const horizontalSpacing = 250;
+                    const verticalSpacing = 200;
+                    const baseOffset = 200;
+
+                    // 计算起始位置
+                    const totalWidth = (childCount - 1) * horizontalSpacing;
+                    const startX = parentNode.x - totalWidth / 2;
+
+                    // 获取二级节点的父节点（一级节点）的索引
+                    const grandParentNode = nodes[parentNode.parentId];
+                    const isParentEven = grandParentNode && grandParentNode.index % 2 === 1;
+
+                    x = startX + index * horizontalSpacing;
+                    if (isParentEven) {
+                        // 如果二级节点在上方，三级节点也在上方
+                        y = parentNode.y - baseOffset - (index * verticalSpacing);
+                        if (index % 2 === 0) {
+                            x += 50; // 增加偶数节点的水平偏移
+                        }
+                    } else {
+                        // 如果二级节点在下方，三级节点也在下方
+                        y = parentNode.y + baseOffset + (index * verticalSpacing);
+                        if (index % 2 === 0) {
+                            x += 50; // 增加偶数节点的水平偏移
+                        }
+                    }
+                }
+
+                nodes.push({
+                    id: currentId,
+                    name: node.name,
+                    value: node.name,
+                    fileCount: node.fileCount,
+                    index: level === 1 ? index_info : undefined,
+                    parentId: parentId, // 添加父节点ID信息
+                    symbol: level === 1 ? 'roundRect' :
+                        (level === 2 || level === 3) ? 'rect' : 'circle', // 二级和三级节点都使用方角矩形
+                    symbolSize: level === 0 ? 50 : level === 1 ? [150, 50] : // 增加一级节点的宽度，从100改为150
+                        level === 2 ? [120, 40] : // 保持二级节点不变
+                        [100, 30], // 增加三级节点的宽度，从80改为100
+                    itemStyle: {
+                        color: (() => {
+                            const defaultColor = level === 0 ? '#ff7875' :
+                                level === 1 ? '#91d5ff' :
+                                level === 2 ? '#87e8de' : '#b7eb8f';
+                            const grayColor = '#808080';
+
+                            if (level === 0) return defaultColor;
+
+                            return shouldBeColored(node) ? defaultColor : grayColor;
+                        })(),
+                        borderRadius: level === 1 ? 10 : 0
+                    },
+                    label: {
+                        show: true,
+                        formatter: function(params) {
+                            if (params.data.level === 1) {
+                                // 一级节点的标签格式
+                                return [
+                                    '{count|' + params.data.fileCount + '}',
+                                    '{name|' + params.name + '}'
+                                ].join('  ');
+                            } else if (params.data.level >= 2) {
+                                // 二级和三级节点的标签格式
+                                return [
+                                    '{count|' + params.data.fileCount + '}', // 数字在节点内
+                                    '\n', // 换行
+                                    '{name|' + params.name + '}' // 名称在节点外
+                                ].join('');
+                            } else {
+                                // 根节点的标签格式
+                                return [
+                                    '{count|' + params.data.fileCount + '}',
+                                    '{name|' + params.name + '}'
+                                ].join('\n');
+                            }
+                        },
+                        rich: {
+                            count: {
+                                color: '#fff',
+                                fontSize: level === 0 ? 20 : level === 1 ? 18 : level === 2 ? 14 : 12, // 调整二级和三级节点数字大小
+                                fontWeight: 'bold',
+                                align: 'center',
+                                padding: level === 1 ? [0, 5, 0, 0] : [0, 0, 0, 0]
+                            },
+                            name: {
+                                color: '#fff', // 改为白色以适应深色背景
+                                fontSize: level === 0 ? 16 : level === 1 ? 14 : level === 2 ? 12 : 10, // 调整二级和三级节点文字大小
+                                align: 'center',
+                                padding: level === 1 ? [0, 0, 0, 5] : level >= 2 ? [5, 0, 0, 0] : // 增加二级和三级节点名称的上边距
+                                    [10, 0, 0, 0]
+                            }
+                        },
+                        position: level === 1 ? 'inside' : level >= 2 ? 'inside' : // 二级和三级节点的数字显示在内部
+                            'bottom',
+                        distance: level >= 2 ? 5 : 10,
+                        backgroundColor: null,
+                        padding: [0, 0]
+                    },
+                    x: x,
+                    y: y,
+                    fixed: true,
+                    level: level,
+                    category: level,
+                    files: node.files || []
+                });
+
+                if (parentId !== -1) {
+                    if (level === 2) {
+                        // 二级节点使用折线连接
+                        const parentNode = nodes[parentId];
+                        const isParentEven = parentNode.index % 2 === 1;
+                        const offset = isParentEven ? -50 : 50; // 根据父节点位置决定偏移方向
+
+                        links.push({
+                            source: parentId,
+                            target: currentId,
+                            lineStyle: {
+                                width: 1,
+                                opacity: 1,
+                                curveness: 0,
+                                type: 'broken'
+                            },
+                            coords: [
+                                [parentNode.x, parentNode.y + offset], // 起点
+                                [parentNode.x, isParentEven ? y + 30 : y - 30], // 垂直线
+                                [x, isParentEven ? y + 30 : y - 30], // 水平线
+                                [x, y] // 终点
+                            ]
+                        });
+                    } else if (level === 3) {
+                        const parentNode = nodes[parentId];
+                        const grandParentNode = nodes[parentNode.parentId];
+                        const isParentEven = grandParentNode && grandParentNode.index % 2 === 1;
+                        const offset = isParentEven ? -30 : 30;
+
+                        links.push({
+                            source: parentId,
+                            target: currentId,
+                            lineStyle: {
+                                width: 1,
+                                opacity: 0.8,
+                                curveness: 0,
+                                type: 'broken'
+                            },
+                            coords: [
+                                [parentNode.x, parentNode.y + (isParentEven ? -offset : offset)], // 起点
+                                [parentNode.x, isParentEven ? y + 20 : y - 20], // 垂直线
+                                [x, isParentEven ? y + 20 : y - 20], // 水平线
+                                [x, y] // 终点
+                            ]
+                        });
+                    } else {
+                        // 一级节点的连接线保持不变
+                        links.push({
+                            source: parentId,
+                            target: currentId,
+                            lineStyle: {
+                                curveness: level === 1 ? 0 : 0.2,
+                                width: level === 1 ? 2 : 1,
+                                opacity: 1
+                            }
+                        });
+                    }
+                }
+
+                if (node.children) {
+                    node.children.forEach(child => {
+                        child.parent = node;
+                    });
+                    node.children.forEach((child, childIndex) => {
+                        processNode(child, currentId, level + 1, childIndex);
+                    });
+                }
+            }
+
+            sortChildren(data);
+            processNode(data);
+            return {
+                nodes,
+                links
+            };
+        }
+
+        function initChart(data) {
+            if (!chart) {
+                chart = echarts.init(document.getElementById('chart'));
+            }
+
+            const chartData = processData(data);
+            const option = {
+                title: {
+                    text: '过程文档集合',
+                    top: 'top',
+                    left: 'center',
+                    textStyle: {
+                        fontSize: 24,
+                        fontWeight: 'bold',
+                        color: '#ffffff'
+                    }
+                },
+                tooltip: {
+                    formatter: function(params) {
+                        const level = params.data.level;
+                        const levelNames = ['根目录', '一级目录', '二级目录', '三级目录'];
+                        return `${params.data.name}<br/>
+                                <span style="color: #999">${levelNames[level]}</span><br/>
+                                <span style="color: #999">包含 ${params.data.fileCount} 个文件</span>`;
+                    },
+                    backgroundColor: 'rgba(50, 50, 50, 0.9)',
+                    borderColor: '#555',
+                    textStyle: {
+                        color: '#fff'
+                    }
+                },
+                legend: {
+                    data: ['根目录', '一级目录', '二级目录', '三级目录'],
+                    top: 50,
+                    right: 50,
+                    orient: 'vertical',
+                    itemWidth: 16,
+                    itemHeight: 16,
+                    textStyle: {
+                        fontSize: 14,
+                        color: '#ffffff'
+                    },
+                    itemStyle: {
+                        borderWidth: 2
+                    },
+                    selected: {
+                        '根目录': true,
+                        '一级目录': true,
+                        '二级目录': true,
+                        '三级目录': true
+                    },
+                    formatter: function(name) {
+                        return [
+                            '{marker|' + '●' + '}',
+                            '{name|' + name + '}'
+                        ].join(' ');
+                    },
+                    textStyle: {
+                        rich: {
+                            marker: {
+                                fontSize: 16,
+                                fontWeight: 'bold'
+                            },
+                            name: {
+                                fontSize: 14,
+                                padding: [0, 0, 0, 5],
+                                color: '#ffffff'
+                            }
+                        }
+                    }
+                },
+                animationDurationUpdate: 1500,
+                animationEasingUpdate: 'quinticInOut',
+                series: [{
+                    type: 'graph',
+                    layout: 'none',
+                    data: chartData.nodes,
+                    links: chartData.links,
+                    roam: true,
+                    zoom: 0.8,
+                    categories: [{
+                        name: '根目录',
+                        itemStyle: {
+                            color: '#ff7875'
+                        }
+                    }, {
+                        name: '一级目录',
+                        itemStyle: {
+                            color: '#91d5ff'
+                        }
+                    }, {
+                        name: '二级目录',
+                        itemStyle: {
+                            color: '#87e8de'
+                        }
+                    }, {
+                        name: '三级目录',
+                        itemStyle: {
+                            color: '#b7eb8f'
+                        }
+                    }],
+                    label: {
+                        show: true,
+                        formatter: function(params) {
+                            if (params.data.level === 1) {
+                                return [
+                                    '{count|' + params.data.fileCount + '}',
+                                    '{name|' + params.name + '}'
+                                ].join('');
+                            }
+                            return [
+                                '{count|' + params.data.fileCount + '}',
+                                '{name|' + params.name + '}'
+                            ].join('\n');
+                        },
+                        rich: {
+                            count: {
+                                color: '#fff',
+                                fontSize: params => params.data.level === 0 ? 20 : params.data.level === 1 ? 18 : 16,
+                                fontWeight: 'bold',
+                                align: 'center'
+                            },
+                            name: {
+                                color: '#fff',
+                                fontSize: params => params.data.level === 0 ? 16 : params.data.level === 1 ? 14 : 12,
+                                align: 'center',
+                                padding: params => params.data.level === 1 ? [0, 0, 0, 5] : [10, 0, 0, 0]
+                            }
+                        }
+                    },
+                    lineStyle: {
+                        color: 'rgba(255, 255, 255, 0.4)',
+                        width: 2,
+                        opacity: 0.6
+                    },
+                    emphasis: {
+                        focus: 'adjacency',
+                        lineStyle: {
+                            width: 4
+                        },
+                        scale: true,
+                        label: {
+                            show: true
+                        }
+                    }
+                }]
+            };
+
+            chart.on('legendselectchanged', function(params) {
+                const selectedLevels = new Set();
+                Object.entries(params.selected).forEach(([name, selected]) => {
+                    if (selected) {
+                        const level = ['根目录', '一级目录', '二级目录', '三级目录'].indexOf(name);
+                        selectedLevels.add(level);
+                    }
+                });
+
+                const newLinks = chartData.links.filter(link => {
+                    const sourceNode = chartData.nodes[link.source];
+                    const targetNode = chartData.nodes[link.target];
+                    return selectedLevels.has(sourceNode.level) && selectedLevels.has(targetNode.level);
+                });
+
+                chart.setOption({
+                    series: [{
+                        links: newLinks
+                    }]
+                });
+            });
+
+            chart.on('click', function(params) {
+                if (params.dataType === 'node') {
+                    const fileList = document.getElementById('fileList');
+                    const fileListUl = fileList.querySelector('ul');
+                    const node = params.data;
+
+                    // 只有二级和三级目录且有文件时才显示
+                    if ((node.level === 2 || node.level === 3) && node.files && node.files.length > 0) {
+                        // 更新标题
+                        fileList.querySelector('h3').textContent = `${node.name} 的文件列表`;
+
+                        // 更新文件列表
+                        fileListUl.innerHTML = node.files
+                            .map(file => `<li>${file.name}</li>`)
+                            .join('');
+
+                        // 显示浮窗
+                        fileList.style.display = 'block';
+                    } else {
+                        fileList.style.display = 'none';
+                    }
+                }
+            });
+
+            // 点击其他地方时隐藏文件列表
+            chart.getZr().on('click', function(params) {
+                if (!params.target) {
+                    document.getElementById('fileList').style.display = 'none';
+                }
+            });
+
+            chart.setOption(option);
+        }
+
+        document.getElementById('selectFolder').addEventListener('click', async() => {
+            try {
+                const dirHandle = await window.showDirectoryPicker({
+                    id: 'pro-docs',
+                    startIn: 'desktop'
+                });
+
+                if (dirHandle.name !== 'Pro-Docs') {
+                    alert('请选择名为Pro-Docs的文件夹！');
+                    return;
+                }
+
+                const structure = await getDirectoryStructure(dirHandle);
+                initChart(structure);
+            } catch (error) {
+                console.error('Error:', error);
+                alert('读取文件夹失败：' + error.message);
+            }
+        });
+
+        // 响应窗口大小变化
+        window.addEventListener('resize', function() {
+            if (chart) {
+                chart.resize();
+            }
+        });
+    </script>
+</body>
+
+</html>
